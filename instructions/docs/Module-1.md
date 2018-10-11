@@ -64,7 +64,7 @@ oc expose pod ceph-nano-0 --type=NodePort
 - Next grab the endpoint, we will use this later to pass to our Jupyter Notebook
 
 ```
-RGW_API_ENDPOINT=http://$(oc describe pod ceph-nano-0 | grep IP | cut -d: -f2 | awk '{print $1}'):8000
+export RGW_API_ENDPOINT=http://$(oc describe pod ceph-nano-0 | grep IP | cut -d: -f2 | awk '{print $1}'):8000
 ```
 
 - Verify the endpoint includes the IP address of the Ceph Nano pod, otherwise re-run the previous command.
