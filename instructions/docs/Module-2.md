@@ -1,155 +1,77 @@
-# Module - 2 : Setting up JupyterHub in OpenShift Container Platform
+# Module - 2 : Building images to use as a base for a Jupyter Notebook application
 
 !!! Summary "Module Agenda"
-    - **In this module you will be creating an OpenShift project for JupyterHub required for the rest of the sessions**
-
-- From your workstation SSH into ``OpenShift Master Node`` with the user name **``cloud-user``** and ``SSH Private Key`` [(Need Help..Learn how to Login)](https://ksingh7.github.io/data-show/#accessing-the-lab)
-
-```
-chmod 400 <path to ssh_key.pem>
-ssh -i <path to ssh_key.pem> cloud-user@<OpenShift Master Node SSH IP Address>
-```  
+    - **In this module you will be building images to use as a base for a Jupyter Notebook application.**
 
 !!! example "Prerequisite"
     - You must run all the commands logged in as user **cloud-user** on the **OpenShift Master Node** node, unless otherwise specified. 
 
-## Create an OpenShift Project
+## Building a OpenShift Spark Image
 
-In order to save your precious lab time, OpenShift Container Platform has already been installed and configured. Before you begin with some data science exercises, let's create an OpenShift project.
-
-- SSH into OpenShift Master Node as ``cloud-user``
+The [radanalytics.io](https://radanalytics.io) community is focused on empowering intelligent application development on the OpenShift Platform. One of the artifacts maintained by the community is incomplete Openshift Spark builder images [(openshift-spark-inc)](https://hub.docker.com/r/radanalyticsio/openshift-spark-inc/) that can be combined with a Spark tarball to create usable OpenShift Spark images (openshift-spark). We have created a custom Spark 2.3.2 tarball that includes Hadoop 2.8.5 for the purposes of this tutorial, and the following commands will combine it with the [radanalyticsio](https://radanalytics.io) incomplete OpenShift Spark builder images.
 
 ```
-ssh -i <path to ssh_key.pem> cloud-user@<OpenShift Master Node IP Address>
+oc new-build --name=openshift-spark \
+             --docker-image=radanalyticsio/openshift-spark-inc:latest \
+             -e SPARK_URL=http://mmgaggle-bd.s3.amazonaws.com/spark-2.3.2-bin-hadoop-2.8.5.tgz \
+             -e SPARK_MD5_URL=http://mmgaggle-bd.s3.amazonaws.com/spark-2.3.2-bin-hadoop-2.8.5.tgz.md5 \
+             --binary
+oc start-build openshift-spark
 ```
 
-- Login to OpenShift
+- You can observe the image building process by tailing the buildconfig log
 
 ```
-oc login -u teamuser1 -p openshift
+oc logs -f buildconfig/openshift-spark
 ```
 
-- Create a new project
+## Building a Jupyter Notebook Image
+
+Once the openshift-spark image is built, you can use it as a base image for building a base-notebook image. Use the base-notebook repository from [radanalyticsio](https://radanalytics.io) as a starting point. You may want to consider forking this repository and using your own copy if you want to build a set of commonly used libraries into the image.
 
 ```
-oc new-project jupyterhub
+oc new-build https://github.com/radanalyticsio/base-notebook \
+             --docker-image="docker-registry.default.svc:5000/data-show/openshift-spark" \
+             --strategy=docker
 ```
 
-- Prepare the OpenShift notebooks and templates
+- Again, you can observe the image building process by tailing the buildconfig log.
 
 ```
-oc apply -f https://raw.githubusercontent.com/vpavlin/jupyterhub-ocp-oauth/ceph-summit-demo/notebooks.json
+oc logs -f buildconfig/base-notebook
 ```
 
-```
-oc apply -f https://raw.githubusercontent.com/vpavlin/jupyterhub-ocp-oauth/ceph-summit-demo/templates.json
-```
+## Creating a Jupyter Notebook application
 
-- Process the template to deploy the JupyterHub application
+Once the base-notebook image is built, you can use it to deploy a Jupyter notebook application.
 
 ```
-oc process jupyterhub-ocp-oauth HASH_AUTHENTICATOR_SECRET_KEY="meh" | oc apply -f -
+oc new-app -i data-show/base-notebook:latest \
+           -e JUPYTER_NOTEBOOK_PASSWORD=developer \
+           -e RGW_API_ENDPOINT=${RGW_API_ENDPOINT} \
+           -e JUPYTER_NOTEBOOK_X_INCLUDE=https://raw.githubusercontent.com/mmgaggle/hybrid-data-context/master/hybrid-data-context.ipynb
 ```
 
-- Once templates are successfully applied, the output should look like this
+- Now expose the Ceph Nano credentials via the OpenShift secret we created earlier to the Jupyter notebook application environment.
 
 ```
-imagestream "jupyterhub-img" created
-buildconfig "jupyterhub-img" created
-configmap "jupyterhub-cfg" created
-serviceaccount "jupyterhub-hub" created
-rolebinding "jupyterhub-edit" created
-deploymentconfig "jupyterhub" created
-service "jupyterhub" created
-route "jupyterhub" created
-persistentvolumeclaim "jupyterhub-db" created
-deploymentconfig "jupyterhub-db" created
-service "jupyterhub-db" created
+oc env --from=secret/ceph-rgw-keys dc/base-notebook
 ```
 
-- You should now have JupyterHub pods and services coming up (will take some time to fully start). 
-- To check the status of pods and services, execute
+- Finally, expose a route to the Jupyter notebook so we can access it from our browser.
 
 ```
-oc get pods
+oc expose svc/base-notebook
 ```
 
-- The deployment is complete when the jupyterhub-db and jupyter pods are fully running and the output should look like this.
+- You can inquire about the status of the deployment from the cli, or through the OpenShift console.
 
 ```
-$ oc get pods
-NAME                     READY     STATUS    RESTARTS   AGE
-jupyterhub-db-1-deploy   1/1       Running   0          19s
-jupyterhub-db-1-zkmxc    0/1       Running   0          17s
-jupyterhub-img-1-build   1/1       Running   0          20s
+oc status
 ```
 
+- Wait for it to finish deploying, and then you can load the route in your browser using the route URL from the cli or from the OpenShift console.
 
-- You could also monitor your application from OpenShift Container Platform Console by visiting ``OpenShift Web Console URL`` that you can get from [Qwiklab Portal under Connection Details](https://ksingh7.github.io/data-show/#wait-for-lab-provisioning-to-complete).
-
-- The user name and password to access the console is ``teamuser1`` and ``openshift`` respectively.
-
-![](images/data-show-images/ocp-login-screen.png)
-
-- Once you are into OpenShift Container Platform Console, click on your project ``jupyterhub``
-
-![](images/data-show-images/ocp-home.png)
-
-- The running pods should look like this when JupyterHub is ready
-
-![](images/data-show-images/ocp-jupyterhub.png)
-
-- Verify you can access your JupyterHub application by visiting the application URL
-
-![](images/data-show-images/ocp-jupyterhub-app-url.png)
-
-- (optional) You can also get your JupyterHub application URL by executing the below command on OpenShift Master Node.
-
-```
-echo "https://"$(oc get route jupyterhub -o jsonpath={.spec.host})
-```
-
-- Finally, log into JupyterHub by using the user name and password ``user1`` and ``79e4e0`` respectively.
-
-![](images/data-show-images/jupyter-login.png)
-
-## Troubleshooting the JupyterHub deployment
-
-#### Issue - 1 : Database not properly installed
-
-Sometimes the JupyterHub deployment to OpenShift runs into race conditions, that could trigger ``Recreate Deployment``
-
-![](images/data-show-images/ocp-jupyterhub-error.png)
-
-- The jupyterhub-db pod never comes up and constantly restarts.  This is often due to the PostgreSQL database not coming up cleanly.  If this occurs, the easiest thing to do is delete the jupyterhub-db persisted volume and rerun the oc process command.
-
-- Delete the persisted volume:
-
-![](images/data-show-images/troubleshooting-1.png)
-
-![](images/data-show-images/troubleshooting-2.png)
-
-- Rerun oc process command:
-
-```
-oc login -u teamuser1 -p openshift
-```
-
-```
-oc process jupyterhub-ocp-oauth HASH_AUTHENTICATOR_SECRET_KEY="meh" | oc apply -f -
-```
-
-- Wait for the pods to come up cleanly:
-
-![](images/data-show-images/ocp-jupyterhub.png)
-
-#### Issue - 2 : 500 Internal Error when logging into JupyterHub
-
-- You receive a ``500 Internal Error``.  Do another deployment/rollout of JupyterHub which forces a restart of the server container and after connecting again to database.
-
-```
-oc rollout latest jupyterhub
-```
 
 !!! summary "End of Module"
-    **We have reached to the end of Module-2. At this point you have learned how to deploy an application on OCP. In the later modules we will use this application to perform some interesting Data Analytics and Machine Learning tasks**
+    **We have reached to the end of Module-2. At this point you have deployed a Jupyter Notebook application and can complete the rest of the lab from the interactive notebook.

@@ -1,245 +1,83 @@
-# Module - 1 : Ceph cluster & Object Storage Setup
+# Module - 1 : Deploying Ceph Nano into OpenShift
 
 !!! Summary "Module Agenda"
-    - **In this module you will be deploying Red Hat Ceph Storage 3 cluster across 3 nodes using Ansible based deployer called ``ceph-ansible``.**
-    - **You will also learn how to configure object storage for S3 API by setting up Ceph Rados Gateway (RGW)**
+    - **In this module you will be deploying a Ceph Nano service into OpenShift**
 
-- From your workstation SSH into ``ceph-node1`` with the user name **``student``** and password **``Redhat18``** [(Need Help..Learn how to Login)](https://ksingh7.github.io/data-show/#accessing-the-lab)
+- From your workstation SSH into ``OpenShift Master Node`` with the user name **``cloud-user``** and ``SSH Private Key`` [(Need Help..Learn how to Login)](https://ksingh7.github.io/data-show/#accessing-the-lab)
 
 ```
-ssh student@<IP Address of ceph-node1>
+chmod 400 <path to ssh_key.pem>
+ssh -i <path to ssh_key.pem> cloud-user@<OpenShift Master Node SSH IP Address>
 ```  
 
 !!! example "Prerequisite"
-    - You must run all the commands logged in as user **student** on the **ceph-node1** node, unless otherwise specified. 
+    - You must run all the commands logged in as user **cloud-user** on the **OpenShift Master Node** node, unless otherwise specified. 
 
-## Fast Forward Deployment
+## Create an OpenShift Project
 
-In order to save your precious lab time, this section deploys and configures the Ceph Cluster as well as Ceph S3 Object storage in a highly automated way using a all-in-one shell script. 
+In order to save your precious lab time, OpenShift Container Platform has already been installed and configured. Before you begin with some data science exercises, you will need to create an OpenShift project.
 
-!!! important
-    - **If you are using Fast Forward method of deployment, you could skip the next sections labeled as "Manual Deployment"**
-
-- To start ``Fast Forward Deployer`` run the following command
+- SSH into OpenShift Master Node as ``cloud-user``
 
 ```
-sh /home/student/auto-pilot/setup_ceph_cluster_with_rgw.sh
+ssh -i <path to ssh_key.pem> cloud-user@<OpenShift Master Node IP Address>
 ```
 
-- The ``Fast Forward Deployer`` should take under 10-12 minutes to complete. Once its done, check the status of your Ceph cluster.
+- Clone hybrid-data-context repository
 
 ```
-sudo ceph -s
+git clone https://github.com/mmgaggle/hybrid-data-context
+cd hybrid-data-context/
 ```
 
-```
-[student@ceph-node1 ceph-ansible]$ sudo ceph -s
-  cluster:
-    id:     908c17fc-1da0-4569-a25a-f1a23f2e101e
-    health: HEALTH_OK
-
-  services:
-    mon: 3 daemons, quorum ceph-node1,ceph-node2,ceph-node3
-    mgr: ceph-node1(active)
-    osd: 12 osds: 12 up, 12 in
-
-  data:
-    pools:   0 pools, 0 pgs
-    objects: 0 objects, 0 bytes
-    usage:   1290 MB used, 5935 GB / 5937 GB avail
-    pgs:
-
-[student@ceph-node1 ceph-ansible]$
-```
-
-
-## Manual Deployment : Setting up environment for ceph-ansible  
-
-!!! important
-    - **If you have choose to follow the above ``Fast Forward Deployment`` method, you should skip the below ``Manual Deployment`` process.**
-
-- Begin by creating a directory for ceph-ansible keys under ``student`` user's home directory.
+- Login to OpenShift
 
 ```
-mkdir ~/ceph-ansible-keys
+oc login -u teamuser1 -p openshift
 ```
 
-- Create a new ansible inventory file which helps ``ceph-ansible`` to know what role needs to be applied on each node.
+- Create a new project
 
 ```
-sudo vi /etc/ansible/hosts
+oc new-project data-show
 ```
 
-- In the ``/etc/ansible/hosts`` inventory file add the following
+- Adjust security context for this project
 
 ```
-[mons]
-ceph-node[1:3]
-
-[osds]
-ceph-node[1:3]
-
-[mgrs]
-ceph-node1
-
-[clients]
-ceph-node1
-
-[rgws]
-ceph-node1
+sudo oc --as system:admin adm policy add-scc-to-user anyuid system:serviceaccount:data-show:default
 ```
 
-!!! info
-    - Since this is a lab environment we are collocating Ceph Mon and Ceph OSD daemons on `ceph-node*` nodes
-    - Also ``ceph-node1`` node will host Ceph Client, Ceph Manager and Ceph RGW services
-
-- Before we begin Ceph deployment, make sure that Ansible can reach to all the cluster nodes.
+- Use OpenShift [secrets](https://docs.openshift.com/container-platform/3.10/dev_guide/secrets.html) to store a set of credentials that the Ceph Nano service will create during its bootstraping process. Later we will show how these secrets can be exposed to applications in OpenShift through environmental variables.
 
 ```
-ansible all -m ping
+oc create -f ceph-rgw-keys.yml -n data-show
 ```
 
-## Manual Deployment : Configuring Ceph-Ansible Settings
-
-- Visit ``ceph-ansible`` main configuration directory
+- Create the Ceph Nano service and create a route to the object gateway
 
 ```
-cd /usr/share/ceph-ansible/group_vars/
+oc create -f ceph-nano.yml -n data-show
+oc expose pod ceph-nano-0 --type=NodePort
 ```
 
-- In the directory you will find ``all.yml`` , ``osds.yml`` and ``clients.yml`` configuration files which are **pre-populated for you** to avoid any typographic errors. Lets look at these configuration files one by one.
-
-!!! tip
-    You can skip editing configuration files as they are pre-populated with correct settings to avoid typos and save time.
-
-- ``all.yml`` configuration file most importantly configures
-    - Ceph repository, path to RHCS ISO
-    - Ceph Monitor network interface ID, public network
-    - Ceph OSD backend as ``filestore``
-    - Ceph RGW port, threads and interface
-    - Ceph configuration settings for pools
+- Next grab the endpoint, we will use this later to pass to our Jupyter Notebook
 
 ```
-cat all.yml
+RGW_API_ENDPOINT=http://$(oc describe pod ceph-nano-0 | grep IP | cut -d: -f2 | awk '{print $1}'):8000
 ```
 
-```
----
-dummy:
-fetch_directory: ~/ceph-ansible-keys
-ceph_repository_type: iso
-ceph_origin: repository
-ceph_repository: rhcs
-ceph_rhcs_version: 3
-ceph_rhcs_iso_path: "/home/student/rhceph-3.0-rhel-7-x86_64.iso"
-
-monitor_interface: eth0
-mon_use_fqdn: true
-public_network: 10.0.1.0/24
-osd_objectstore: filestore
-
-radosgw_civetweb_port: 80
-radosgw_civetweb_num_threads: 512
-radosgw_civetweb_options: "num_threads={{ radosgw_civetweb_num_threads }}"
-radosgw_interface: eth0
-radosgw_dns_name: "ceph-node1"
-
-ceph_conf_overrides:
-  global:
-    osd pool default pg num: 64
-    osd pool default pgp num: 64
-    mon allow pool delete: true
-    mon clock drift allowed: 5
-    rgw dns name: "ceph-node1"
-```
-
-
-- ``osds.yml`` configuration file most importantly configures
-    - Ceph OSD deployment scenario to be collocated (ceph-data and ceph-journal on same device)
-    - Auto discover storage device and use them as Ceph OSD
-    - Allow Ceph OSD nodes to be ceph admin nodes (optional)
+- Verify the endpoint includes the IP address of the Ceph Nano pod, otherwise re-run the previous command.
 
 ```
-cat osds.yml
+echo $RGW_API_ENDPOINT
 ```
 
-```
----
-dummy:
-copy_admin_key: true
-osd_auto_discovery: true
-osd_scenario: collocated
-```
+- You could also use the OpenShift Container Platform Console by visiting ``OpenShift Web Console URL`` that you can get from [Qwiklab Portal under Connection Details](https://ksingh7.github.io/data-show/#wait-for-lab-provisioning-to-complete).
 
-- ``clients.yml`` configuration file most importantly configures
-    - Allow Ceph client nodes to issue ceph admin commands (optional, not recomended for production)
+- The user name and password to access the console is ``teamuser1`` and ``openshift`` respectively.
 
-```
-cat clients.yml
-```
-
-```
----
-dummy:
-copy_admin_key: True
-```
-
-
-## Manual Deployment of RHCS Cluster
-
-- To start deploying RHCS cluster, switch to ``ceph-ansible`` root directory
-
-```
-cd /usr/share/ceph-ansible
-```
-
-
-- Run ``ceph-ansible`` playbook
-
-```
-time ansible-playbook site.yml
-```
-
-- This should usually take 10-12 minutes to complete. Once its done, play recap should look similar to below. Make sure play recap does not show any host run failed.
-
-```
-PLAY RECAP ******************************************************************
-ceph-node1                 : ok=149  changed=29   unreachable=0    failed=0
-ceph-node2                 : ok=136  changed=24   unreachable=0    failed=0
-ceph-node3                 : ok=138  changed=25   unreachable=0    failed=0
-
-real  10m9.966s
-user  2m6.029s
-sys 1m1.005s
-```
-
-
-- Finally check the status of your cluster. 
-
-```
-sudo ceph -s
-```
-
-```
-[student@ceph-node1 ceph-ansible]$ sudo ceph -s
-  cluster:
-    id:     908c17fc-1da0-4569-a25a-f1a23f2e101e
-    health: HEALTH_OK
-
-  services:
-    mon: 3 daemons, quorum ceph-node1,ceph-node2,ceph-node3
-    mgr: ceph-node1(active)
-    osd: 12 osds: 12 up, 12 in
-
-  data:
-    pools:   0 pools, 0 pgs
-    objects: 0 objects, 0 bytes
-    usage:   1290 MB used, 5935 GB / 5937 GB avail
-    pgs:
-
-[student@ceph-node1 ceph-ansible]$
-```
-
+![](images/data-show-images/ocp-login-screen.png)
 
 !!! summary "End of Module"
-    **We have reached to the end of Module-1. At this point you should have a healthy RHCS cluster up and running with 3 x Ceph Monitors, 3 x Ceph OSDs (12 x OSDs), 1 x Ceph Manager , 1 x Ceph RGW.**
+    **We have reached to the end of Module-1. At this point you have learned how to deploy Ceph Nano into OCP. In the next module we will build images as a base for our Jupyter Notebook application.**
