@@ -41,37 +41,5 @@ oc new-build https://github.com/radanalyticsio/base-notebook \
 oc logs -f buildconfig/base-notebook
 ```
 
-## Creating a Jupyter Notebook application
-
-Once the base-notebook image is built, you can use it to deploy a Jupyter notebook application.
-
-```
-oc new-app -i data-show/base-notebook:latest \
-           -e JUPYTER_NOTEBOOK_PASSWORD=developer \
-           -e RGW_API_ENDPOINT=${RGW_API_ENDPOINT} \
-           -e JUPYTER_NOTEBOOK_X_INCLUDE=https://raw.githubusercontent.com/mmgaggle/hybrid-data-context/master/hybrid-data-context.ipynb
-```
-
-- Now expose the Ceph Nano credentials via the OpenShift secret we created earlier to the Jupyter notebook application environment.
-
-```
-oc env --from=secret/ceph-rgw-keys dc/base-notebook
-```
-
-- Finally, expose a route to the Jupyter notebook so we can access it from our browser.
-
-```
-oc expose svc/base-notebook
-```
-
-- You can inquire about the status of the deployment from the cli, or through the OpenShift console.
-
-```
-oc status
-```
-
-- Wait for it to finish deploying, and then you can load the route in your browser using the route URL from the cli or from the OpenShift console.
-
-
 !!! summary "End of Module"
-    **We have reached to the end of Module-2. At this point you have deployed a Jupyter Notebook application and can complete the rest of the lab from the interactive notebook.
+    **We have reached to the end of Module-2. At this point you have created all the images you need to deploy a Jupyter Notebook application.**
